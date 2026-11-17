@@ -7,18 +7,20 @@ const BALL_SIZE = 12;
 const BALL_SPEED_START = 300, BALL_SPEED_STEP = 20, BALL_SPEED_MAX = 520;
 const BRICKS_PER_SPEEDUP = 5;
 const MAX_BOUNCE_ANGLE = Math.PI / 3; // 60° respecto a la vertical
-const BRICK_W = 32, BRICK_H = 16, BRICK_COLS = 13, BRICK_OFFSET_X = 16, BRICK_OFFSET_Y = 64;
+const BRICK_W = 32, BRICK_H = 16, BRICK_COLS = 13, BRICK_OFFSET_X = 16, BRICK_OFFSET_Y = 48;
+const HIT_FLASH_MS = 100; // duración del parpadeo blanco
 const LIVES_START = 3;
 const MAX_DT = 1 / 30; // s
 
 // Filas de arriba abajo
 const ROWS = [
-  { color: 'red',     points: 60 },
-  { color: 'yellow',  points: 50 },
-  { color: 'cyan',    points: 40 },
-  { color: 'magenta', points: 30 },
-  { color: 'hotpink', points: 20 },
-  { color: 'green',   points: 10 },
+  { color: 'gray',    points: 100, hits: 2 },
+  { color: 'red',     points: 60,  hits: 1 },
+  { color: 'yellow',  points: 50,  hits: 1 },
+  { color: 'cyan',    points: 40,  hits: 1 },
+  { color: 'magenta', points: 30,  hits: 1 },
+  { color: 'hotpink', points: 20,  hits: 1 },
+  { color: 'green',   points: 10,  hits: 1 },
 ];
 
 const state = {
@@ -29,7 +31,7 @@ const state = {
   bricksBroken: 0,
   paddle: { x: 184 },      // borde izquierdo; y fijo = PADDLE_Y
   ball: { x: 0, y: 0, vx: 0, vy: 0, speed: BALL_SPEED_START },
-  bricks: [],              // { x, y, color, points, alive: true }
+  bricks: [],              // { x, y, color, points, hits, hitAt: null, alive: true }
   explosions: [],          // { x, y, color, start }, start = timestamp en ms
   input: { left: false, right: false, mouseX: null },
 };
@@ -107,6 +109,8 @@ function buildBricks() {
         y: BRICK_OFFSET_Y + r * BRICK_H,
         color: row.color,
         points: row.points,
+        hits: row.hits,      // golpes que le quedan
+        hitAt: null,         // timestamp (ms) del último golpe que no lo rompió
         alive: true,
       });
     }
@@ -243,13 +247,24 @@ function collideBricks(now) {
     const overlapY = Math.min(ball.y + BALL_SIZE, brick.y + BRICK_H) - Math.max(ball.y, brick.y);
     if (overlapX <= 0 || overlapY <= 0) continue;
 
-    // Rebotar en el eje de menor solapamiento y sacar la pelota del bloque
+    // Rebotar en el eje de menor solapamiento. Se empuja según el lado donde
+    // está la pelota (no según su velocidad) y solo se invierte si va hacia el bloque.
     if (overlapX < overlapY) {
-      ball.x += ball.vx > 0 ? -overlapX : overlapX;
-      ball.vx = -ball.vx;
+      const fromLeft = ball.x + BALL_SIZE / 2 < brick.x + BRICK_W / 2;
+      ball.x += fromLeft ? -overlapX : overlapX;
+      if (fromLeft ? ball.vx > 0 : ball.vx < 0) ball.vx = -ball.vx;
     } else {
-      ball.y += ball.vy > 0 ? -overlapY : overlapY;
-      ball.vy = -ball.vy;
+      const fromAbove = ball.y + BALL_SIZE / 2 < brick.y + BRICK_H / 2;
+      ball.y += fromAbove ? -overlapY : overlapY;
+      if (fromAbove ? ball.vy > 0 : ball.vy < 0) ball.vy = -ball.vy;
+    }
+
+    // Golpe que no lo rompe: solo rebote, parpadeo y sonido de rebote
+    brick.hits--;
+    if (brick.hits > 0) {
+      brick.hitAt = now;
+      playSound('bounce');
+      return;
     }
 
     brick.alive = false;
@@ -303,7 +318,14 @@ function render(now) {
   ctx.fillRect(0, 0, WIDTH, HEIGHT);
 
   for (const brick of state.bricks) {
-    if (brick.alive) drawSprite(ctx, 'block_' + brick.color, brick.x, brick.y, BRICK_W, BRICK_H);
+    if (!brick.alive) continue;
+    drawSprite(ctx, 'block_' + brick.color, brick.x, brick.y, BRICK_W, BRICK_H);
+
+    // Parpadeo blanco tras un golpe que no lo rompió
+    if (brick.hitAt !== null && now - brick.hitAt < HIT_FLASH_MS) {
+      ctx.fillStyle = 'rgba(255, 255, 255, 0.8)';
+      ctx.fillRect(brick.x, brick.y, BRICK_W, BRICK_H);
+    }
   }
 
   for (const ex of state.explosions) {
